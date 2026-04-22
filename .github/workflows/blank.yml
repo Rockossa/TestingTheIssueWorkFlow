@@ -1,8 +1,7 @@
-name: Move Issue to InProgress on Feature Branch Creation
+name: Move Issue to In Progress When Feature Branch Is Created
 
 on:
-  create:   # triggers when a branch or tag is created
-    branches: ["*"]
+  create:
 
 jobs:
   move_status:
@@ -10,17 +9,15 @@ jobs:
 
     permissions:
       issues: write
-      projects: write
       contents: read
 
     steps:
-      - name: Detect issue number from branch name
-        id: detect
+      - name: Extract issue number from branch name
+        id: extract
         run: |
           ref="${{ github.ref_name }}"
 
-          # Try to extract an issue number from branch name
-          # Supports: feature/123, fb-123, issue-123, 123-description
+          # Extract first number found in branch name
           if [[ "$ref" =~ ([0-9]+) ]]; then
             echo "issue_number=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
           else
@@ -28,52 +25,50 @@ jobs:
           fi
 
       - name: Stop if no issue number found
-        if: steps.detect.outputs.issue_number == ''
-        run: echo "No issue number found in branch name, skipping."
+        if: steps.extract.outputs.issue_number == ''
+        run: echo "No issue number found in branch name. Skipping."
 
-      - name: Get issue details
+      - name: Get issue node ID
         id: issue
-        if: steps.detect.outputs.issue_number != ''
+        if: steps.extract.outputs.issue_number != ''
         uses: actions/github-script@v7
         with:
           script: |
             const issue = await github.rest.issues.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: ${{ steps.detect.outputs.issue_number }}
+              issue_number: ${{ steps.extract.outputs.issue_number }}
             });
-            return issue.data;
+            return issue.data.node_id;
 
-      - name: Check if issue is in Ready or Backlog
-        id: check
-        if: steps.detect.outputs.issue_number != ''
-        run: |
-          status="${{ steps.issue.outputs.result.status }}"
-          if [[ "$status" == "Ready" || "$status" == "Backlog" ]]; then
-            echo "should_update=true" >> $GITHUB_OUTPUT
-          else
-            echo "should_update=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Update Project Status to InProgress
-        if: steps.check.outputs.should_update == 'true'
+      - name: Update Project Status → In progress
+        if: steps.extract.outputs.issue_number != ''
         uses: actions/github-script@v7
         with:
           script: |
-            const issueNodeId = context.payload.issue.node_id;
+            const issueNodeId = "${{ steps.issue.outputs.result }}";
 
             await github.graphql(`
-              mutation($id: ID!, $status: String!) {
+              mutation(
+                $project: ID!,
+                $item: ID!,
+                $field: ID!,
+                $option: String!
+              ) {
                 updateProjectV2ItemFieldValue(
                   input: {
-                    projectId: "YOUR_PROJECT_ID"
-                    itemId: $id
-                    fieldId: "YOUR_STATUS_FIELD_ID"
-                    value: { singleSelectOptionId: $status }
+                    projectId: $project,
+                    itemId: $item,
+                    fieldId: $field,
+                    value: { singleSelectOptionId: $option }
                   }
-                ) { clientMutationId }
+                ) {
+                  clientMutationId
+                }
               }
             `, {
-              id: issueNodeId,
-              status: "IN_PROGRESS_OPTION_ID"
+              project: "1",
+              item: issueNodeId,
+              field: "PVTSSF_lAHOCR0Qes4BVRSmzhQuPKw",
+              option: "47fc9ee4"   // In progress
             });
