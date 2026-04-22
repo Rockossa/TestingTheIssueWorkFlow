@@ -12,15 +12,25 @@ jobs:
       contents: read
 
     steps:
+      - name: Debug event
+        run: |
+          echo "Event name: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Ref name: ${{ github.ref_name }}"
+          echo "Full event JSON:"
+          echo '${{ toJson(github.event) }}'
+
       - name: Extract issue number from branch name
         id: extract
         run: |
           ref="${{ github.ref_name }}"
+          echo "Branch name: $ref"
 
-          # Extract first number found in branch name
           if [[ "$ref" =~ ([0-9]+) ]]; then
+            echo "Found issue number: ${BASH_REMATCH[1]}"
             echo "issue_number=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
           else
+            echo "No issue number found"
             echo "issue_number=" >> $GITHUB_OUTPUT
           fi
 
@@ -34,11 +44,13 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            console.log("Fetching issue:", ${{ steps.extract.outputs.issue_number }});
             const issue = await github.rest.issues.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: ${{ steps.extract.outputs.issue_number }}
             });
+            console.log("Issue node ID:", issue.data.node_id);
             return issue.data.node_id;
 
       - name: Update Project Status → In progress
@@ -46,29 +58,37 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const issueNodeId = "${{ steps.issue.outputs.result }}";
+            const issueNodeId = `${{ steps.issue.outputs.result }}`;
+            console.log("Updating project status for item:", issueNodeId);
 
-            await github.graphql(`
-              mutation(
-                $project: ID!,
-                $item: ID!,
-                $field: ID!,
-                $option: String!
-              ) {
-                updateProjectV2ItemFieldValue(
-                  input: {
-                    projectId: $project,
-                    itemId: $item,
-                    fieldId: $field,
-                    value: { singleSelectOptionId: $option }
-                  }
+            try {
+              const result = await github.graphql(`
+                mutation(
+                  $project: ID!,
+                  $item: ID!,
+                  $field: ID!,
+                  $option: String!
                 ) {
-                  clientMutationId
+                  updateProjectV2ItemFieldValue(
+                    input: {
+                      projectId: $project,
+                      itemId: $item,
+                      fieldId: $field,
+                      value: { singleSelectOptionId: $option }
+                    }
+                  ) {
+                    clientMutationId
+                  }
                 }
-              }
-            `, {
-              project: "1",
-              item: issueNodeId,
-              field: "PVTSSF_lAHOCR0Qes4BVRSmzhQuPKw",
-              option: "47fc9ee4"   // In progress
-            });
+              `, {
+                project: "1",
+                item: `${issueNodeId}`,
+                field: "PVTSSF_lAHOCR0Qes4BVRSmzhQuPKw",
+                option: "47fc9ee4"
+              });
+
+              console.log("GraphQL result:", result);
+            } catch (err) {
+              console.log("GraphQL ERROR:", err);
+              throw err;
+            }
