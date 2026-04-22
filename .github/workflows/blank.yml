@@ -1,0 +1,79 @@
+name: Move Issue to InProgress on Feature Branch Creation
+
+on:
+  create:   # triggers when a branch or tag is created
+    branches: ["*"]
+
+jobs:
+  move_status:
+    runs-on: ubuntu-latest
+
+    permissions:
+      issues: write
+      projects: write
+      contents: read
+
+    steps:
+      - name: Detect issue number from branch name
+        id: detect
+        run: |
+          ref="${{ github.ref_name }}"
+
+          # Try to extract an issue number from branch name
+          # Supports: feature/123, fb-123, issue-123, 123-description
+          if [[ "$ref" =~ ([0-9]+) ]]; then
+            echo "issue_number=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
+          else
+            echo "issue_number=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Stop if no issue number found
+        if: steps.detect.outputs.issue_number == ''
+        run: echo "No issue number found in branch name, skipping."
+
+      - name: Get issue details
+        id: issue
+        if: steps.detect.outputs.issue_number != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.detect.outputs.issue_number }}
+            });
+            return issue.data;
+
+      - name: Check if issue is in Ready or Backlog
+        id: check
+        if: steps.detect.outputs.issue_number != ''
+        run: |
+          status="${{ steps.issue.outputs.result.status }}"
+          if [[ "$status" == "Ready" || "$status" == "Backlog" ]]; then
+            echo "should_update=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_update=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update Project Status to InProgress
+        if: steps.check.outputs.should_update == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNodeId = context.payload.issue.node_id;
+
+            await github.graphql(`
+              mutation($id: ID!, $status: String!) {
+                updateProjectV2ItemFieldValue(
+                  input: {
+                    projectId: "YOUR_PROJECT_ID"
+                    itemId: $id
+                    fieldId: "YOUR_STATUS_FIELD_ID"
+                    value: { singleSelectOptionId: $status }
+                  }
+                ) { clientMutationId }
+              }
+            `, {
+              id: issueNodeId,
+              status: "IN_PROGRESS_OPTION_ID"
+            });
