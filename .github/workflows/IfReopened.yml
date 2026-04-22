@@ -1,0 +1,86 @@
+# This is a basic workflow to help you get started with Actions
+
+name: IfReopened
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  handle_status_change:
+    runs-on: ubuntu-latest
+
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: read
+      actions: read
+      projects: write
+
+    steps:
+      - name: Check command
+        id: cmd
+        run: |
+          body="${{ github.event.comment.body }}"
+          if [[ "$body" == "/ok" ]]; then
+            echo "command=ok" >> $GITHUB_OUTPUT
+          elif [[ "$body" == "/reopen" ]]; then
+            echo "command=reopen" >> $GITHUB_OUTPUT
+          else
+            echo "command=none" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Stop if no command
+        if: steps.cmd.outputs.command == 'none'
+        run: echo "No command found, exiting."
+
+      - name: Get Issue Data
+        if: steps.cmd.outputs.command != 'none'
+        uses: actions/github-script@v7
+        id: issue
+        with:
+          script: |
+            return await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            })
+
+      - name: Ensure issue is in ToTest
+        if: steps.cmd.outputs.command != 'none'
+        run: |
+          status="${{ steps.issue.outputs.result.status }}"
+          if [[ "$status" != "ToTest" ]]; then
+            echo "Issue not in ToTest, ignoring."
+            exit 1
+          fi
+
+      - name: Update Project Status
+        if: steps.cmd.outputs.command != 'none'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const command = "${{ steps.cmd.outputs.command }}";
+            const issueNodeId = context.payload.issue.node_id;
+
+            const newStatus =
+              command === "ok" ? "Done" :
+              command === "reopen" ? "Ready" : null;
+
+            if (!newStatus) return;
+
+            await github.graphql(`
+              mutation($id: ID!, $status: String!) {
+                updateProjectV2ItemFieldValue(
+                  input: {
+                    projectId: "YOUR_PROJECT_ID"
+                    itemId: $id
+                    fieldId: "YOUR_STATUS_FIELD_ID"
+                    value: { singleSelectOptionId: $status }
+                  }
+                ) { clientMutationId }
+              }
+            `, {
+              id: issueNodeId,
+              status: newStatus
+            });
